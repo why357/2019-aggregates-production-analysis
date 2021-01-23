@@ -1,0 +1,785 @@
+---
+title: "Aggregates Production Analysis"
+author: "Hanyan Wang"
+output: 
+   flexdashboard::flex_dashboard:
+      orientation: rows
+      vertical_layout: fill
+   
+---
+   
+```{js}
+$('.navbar-inverse').removeClass('navbar-inverse').addClass('navbar-default');
+```
+
+
+```{r global, results='hide'}
+library(flexdashboard)
+library(treemap)
+library(dplyr)
+library(tidyr)
+library(highcharter)
+library(htmlwidgets)
+library(leaflet)
+library(leaflet.minicharts)
+library(formattable)
+library(sparkline)
+library(DT)
+library(tibble)
+library(rgdal)
+library(sf)
+
+
+
+QuarrySurveyDB <- read.csv("QuarrySurveyDB.csv")
+concordance_mineraltype <- read.csv("concordance_MineralType.csv")
+ResponseRate <- read.csv("Survey _response_rate.csv")
+
+
+NZ_RG_sf <- sf::st_read("REGC2017_GV_Clipped.shp")
+
+NZ_RG_sf_WGS84 <- st_transform(NZ_RG_sf, "+proj=longlat +datum=WGS84")
+
+NZ_RG_sf_WGS84 <- subset(NZ_RG_sf_WGS84, REGC2017_N != "Area Outside Region")
+
+
+NZ_RG_sf_WGS84$REGC2017_N <- as.character(NZ_RG_sf_WGS84$REGC2017_N)
+NZ_RG_sf_WGS84[15,2] <- "Nelson/Tasman"
+NZ_RG_sf_WGS84[14,2] <- "Nelson/Tasman"
+
+
+NZ_RG_sf_WGS84_Merged <- NZ_RG_sf_WGS84 %>%
+   group_by(REGC2017_N) %>%
+   summarise(geometry = sf::st_union(geometry)) %>%
+   ungroup()
+
+
+
+
+```
+
+Key Facts {data-orientation=rows}
+=======================================================================
+   
+Row {data-height=100}
+-----------------------------------------------------------------------
+   
+### 2019 Total Quarry Production
+   
+```{r}
+
+
+QuarrySurveyDB_tidy_temp2 <- filter(QuarrySurveyDB, SurveyYear == "2019" & MineralType != "Nil Output" & MineralType != "No Return" & MineralType != "Not Operating") %>%
+   filter(Region != "Chatham Islands") %>%
+   select(SurveyYear, QuantitySold, ValueSold, Region, MineralType) %>%
+   left_join(concordance_mineraltype) %>%
+   group_by(SurveyYear, MineralTypeTarget) %>%
+   summarise(QuantitySold = sum(QuantitySold, na.rm = T),
+             ValueSold = sum(ValueSold, na.rm = T)) %>%
+   ungroup()
+
+QuarryTotalPro_2019 <- sum(as.numeric(QuarrySurveyDB_tidy_temp2$QuantitySold), na.rm = TRUE)/1000000
+
+QuarryTotalPro_2019_formatted <- digits(QuarryTotalPro_2019, 2) %>% paste0("Mt")
+
+
+
+QuarryTotalSold_2019 <- sum(as.numeric(QuarrySurveyDB_tidy_temp2$ValueSold), na.rm = TRUE)/1000000
+
+QuarryTotalSold_2019_formatted <- currency(QuarryTotalSold_2019, "$") %>% paste0("M")
+
+
+
+QuarryAvePrice_2019 <- QuarryTotalSold_2019/QuarryTotalPro_2019
+
+QuarryAvePrice_2019_formatted <- digits(QuarryAvePrice_2019, 2) %>% paste0("NZD/Tonne")
+
+
+valueBox(QuarryTotalPro_2019_formatted,
+         icon = "fa-industry",
+         color = "#7cb5ec"
+         
+)
+
+```
+
+
+### 2019 Total Quarry Sales
+
+```{r}
+
+valueBox(QuarryTotalSold_2019_formatted,
+         icon = "fa-money-check-alt",
+         color = "#7cb5ec"
+)
+
+```
+
+### 2019 Quarry Products Price
+
+```{r}
+
+valueBox(QuarryAvePrice_2019_formatted,
+         icon = "fa-chart-line",
+         color = "#7cb5ec"
+)
+
+```
+
+Row {data-height=300}
+-----------------------------------------------------------------------
+   
+### Response rate
+   
+```{r}
+
+hcResponseRate <- highchart() %>%
+   hc_exporting(enabled = TRUE, formAttributes = list(target = "_blank")) %>%
+   hc_yAxis(title = list(text = "Response rate"),
+            labels = list(format = "{value}%"),
+            tickInterval = 5) %>%
+   hc_xAxis(categories = ResponseRate$Year) %>%
+   hc_add_series(data = ResponseRate$Response,
+                 type = "line",
+                 name = "Response rate") %>%
+   hc_chart(zoomType = "x") %>%
+   hc_tooltip(pointFormat = "<span style=\"color:{series.color}\">{series.name}</span>:
+              <b>{point.y:,.0f}%",
+              shared = F)
+
+hcResponseRate
+
+
+```
+
+Row {data-height=500}
+-----------------------------------------------------------------------
+   
+### Compound annual growth (CAGR) for quantity sold
+   
+   
+```{r}
+
+QDB_tidy_QuantitySold <- QuarrySurveyDB %>%
+   select(SurveyYear, QuantitySold, Region, MineralType) %>%
+   filter(SurveyYear >= 1999) %>%
+   group_by(SurveyYear, Region) %>%
+   summarise(TotalQuantity = sum(QuantitySold))
+
+
+#####CAGR QUantity######
+
+#####CAGR function######
+
+calc_cagr_quantity <- function(df, n) {
+   df <- df %>%
+      arrange(Region, SurveyYear) %>%
+      group_by(Region) %>%
+      mutate(CAGR_Quantity = ((TotalQuantity / lag(TotalQuantity, n)) ^ (1 / n)) - 1)
+   
+   
+   return(df)
+}
+
+
+CAGR_10_Quantity <- calc_cagr_quantity(QDB_tidy_QuantitySold, 10) %>%
+   filter(SurveyYear == 2019) %>%
+   rename(CAGR10 = CAGR_Quantity)
+
+CAGR_5_Quantity <- calc_cagr_quantity(QDB_tidy_QuantitySold,5) %>%
+   filter(SurveyYear == 2019) %>%
+   rename(CAGR5 = CAGR_Quantity)
+
+CAGR_1_Quantity <- calc_cagr_quantity(QDB_tidy_QuantitySold,1) %>%
+   filter(SurveyYear == 2019) %>%
+   rename(CAGR1 = CAGR_Quantity)
+
+
+CAGR_Quantity <- CAGR_1_Quantity %>%
+   left_join(CAGR_5_Quantity) %>%
+   left_join(CAGR_10_Quantity)
+
+CAGR_Quantity <- CAGR_Quantity %>%
+   select(-SurveyYear) %>% 
+   rename("2019 Quantity Sold" = TotalQuantity)
+
+
+CAGR_Quantity$`2019 Quantity Sold` <- accounting(CAGR_Quantity$`2019 Quantity Sold`)
+
+
+
+sign_formatter <- formatter("span",
+                            x ~ percent(x,digits = 1),
+                            style = x ~style(color = ifelse(x > 0, "green", ifelse(x < 0, "red", "black" ))))
+
+CAGR_Quantity <-formattable(CAGR_Quantity,
+                            align = c("l", rep("r", NCOL(CAGR_Quantity) - 1)),
+                            list(CAGR1 =  sign_formatter,
+                                 CAGR5 = sign_formatter,
+                                 CAGR10 = sign_formatter,
+                                 '2019 Quantity Sold' = color_bar("lightgreen"),
+                                 Region = formatter("span", style = ~ style(color = "grey", font.weight = "bold"))
+                            ))
+CAGR_Quantity
+
+
+```
+
+
+### Compound annual growth (CAGR) for sold value
+
+```{r}
+
+QDB_tidy_ValueSold <- QuarrySurveyDB %>%
+   select(SurveyYear, ValueSold, Region, MineralType) %>%
+   filter(SurveyYear >= 1999) %>%
+   group_by(SurveyYear, Region) %>%
+   summarise(TotalValue = sum(ValueSold))
+
+
+#####CAGR function######
+
+calc_cagr_value <- function(df, n) {
+   df <- df %>%
+      arrange(Region, SurveyYear) %>%
+      group_by(Region) %>%
+      mutate(CAGR_Value = ((TotalValue / lag(TotalValue, n)) ^ (1 / n)) - 1)
+   
+   
+   return(df)
+}
+
+
+CAGR_10_ValueSold <- calc_cagr_value(QDB_tidy_ValueSold, 10) %>%
+   filter(SurveyYear == 2019) %>%
+   rename(CAGR10 = CAGR_Value)
+
+CAGR_5_ValueSold <- calc_cagr_value(QDB_tidy_ValueSold,5) %>%
+   filter(SurveyYear == 2019) %>%
+   rename(CAGR5 = CAGR_Value)
+
+CAGR_1_ValueSold <- calc_cagr_value(QDB_tidy_ValueSold,1) %>%
+   filter(SurveyYear == 2019) %>%
+   rename(CAGR1 = CAGR_Value)
+
+
+CAGR_ValueSold <- CAGR_1_ValueSold %>%
+   left_join(CAGR_5_ValueSold) %>%
+   left_join(CAGR_10_ValueSold)
+
+
+CAGR_ValueSold <- CAGR_ValueSold %>%
+   select(-SurveyYear) %>%
+   rename("2019 Sold Value" = TotalValue)
+
+
+CAGR_ValueSold$`2019 Sold Value` <- currency(CAGR_ValueSold$`2019 Sold Value`)
+
+
+CAGR_ValueSold <-formattable(CAGR_ValueSold,
+                             align = c("l", rep("r", NCOL(CAGR_ValueSold) - 1)),
+                             list(CAGR1 =  sign_formatter,
+                                  CAGR5 = sign_formatter,
+                                  CAGR10 = sign_formatter,
+                                  '2019 Sold Value' = color_bar("lightgreen"),
+                                  Region = formatter("span", style = ~ style(color = "grey", font.weight = "bold")))
+)
+
+CAGR_ValueSold
+
+
+```
+
+
+Aggregates Production Statistics
+=======================================================================
+Row {data-height=445} {.tabset}
+-----------------------------------------------------------------------
+   
+###  Aggregates Production by Region
+   
+```{r}
+
+#####read data#####
+
+
+QuarrySurveyDB_tidy_temp1 <- select(QuarrySurveyDB, SurveyYear, QuantitySold, ValueSold, Region, MineralType) %>%
+   filter(MineralType != "Nil Output" & MineralType != "No Return" & MineralType != "Not Operating") %>%
+   filter(Region != "Chatham Islands") %>%
+   left_join(concordance_mineraltype) %>%
+   group_by(SurveyYear, Region, MineralTypeTarget) %>%
+   summarise(QuantitySold = sum(QuantitySold, na.rm = T),
+             ValueSold = sum(ValueSold, na.rm = T)) %>%
+   ungroup()
+
+
+#####Data processing#####
+
+
+QuarryProduction_Region <- select(QuarrySurveyDB_tidy_temp1, SurveyYear, Region, QuantitySold) %>%
+   group_by(SurveyYear, Region) %>%
+   summarise(QuantitySold = sum(QuantitySold, na.rm = T))
+
+QuarryProduction_Region <-within(QuarryProduction_Region, Region <- factor(Region,
+                                                                           levels = c("Waikato", "Canterbury", "Auckland", "Northland", "Wellington", 
+                                                                                      "Manawatu/Wanganui", "Otago", "Bay of Plenty", "Nelson/Tasman", 
+                                                                                      "Southland", "Hawkes Bay", "Taranaki", "West Coast", "Gisborne",
+                                                                                      "Marlborough","Chatham Islands"
+                                                                                      
+                                                                           )))
+
+#####insert function#####
+
+hcoptslang <- getOption("highcharter.lang")
+hcoptslang$thousandsSep <- ","
+options(highcharter.lang = hcoptslang)
+
+
+#####visualization#####
+
+cols <- c("#7cb5ec", "#434348", "#90ed7d", "#f7a35c", "#8085e9", "#f15c80", "#e4d354", "#2b908f", "#f45b5b", "#EF9A9A","#90CAF9", "#EF9A9A", "#9FA8DA", "#FFCC80", "#C5E1A5", "#B0BEC5")
+
+
+regional_quarries_production <- highchart() %>%
+   hc_exporting(enabled = TRUE, formAttributes = list(target = "_blank")) %>%
+   hc_add_series(data = QuarryProduction_Region,
+                 type = "area",
+                 hcaes(x = SurveyYear, y = QuantitySold, group = Region)) %>%
+   hc_xAxis(categories = unique(QuarryProduction_Region$SurveyYear),
+            tickmarkPlacement = "on") %>%
+   hc_yAxis(title = list(text = "Millions of tonnes")) %>%
+   hc_tooltip(pointFormat = "<span style=\"color:{series.color}\">{series.name}</span>:
+              <b>{point.y:,.0f} tonnes</b> <b>({point.percentage:.1f}%)</b> <br/>",
+              shared = T) %>%
+   hc_chart(zoomType = "x") %>%
+   hc_legend(align = "right",
+             layout = "vertical",
+             verticalAlign = "middle") %>%
+   hc_plotOptions(area = list(
+      stacking = "normal",
+      lineColor = "#ffffff",
+      lineWidth = 1,
+      marker = list(
+         enabled = F,
+         lineWidth = 1,
+         lineColor = "#ffffff"
+      ))) %>%
+   hc_colors(cols)
+
+
+regional_quarries_production
+
+
+
+```
+
+### Quantity Sold Table
+
+```{r}
+
+#####Data processing#####
+
+QuarryProduction_Region$QuantitySold <- accounting(QuarryProduction_Region$QuantitySold, digits = 0L)
+
+QuarryProduction_Region_DT <- spread(QuarryProduction_Region, SurveyYear, QuantitySold)
+
+quarry_sparkline_data <- QuarryProduction_Region %>%
+   group_by(Region) %>%
+   summarize(
+      TrendSparkline = spk_chr(
+         QuantitySold, type ="line"
+      )
+   )
+
+
+QuarryProduction_Region_DT_spk <- left_join(QuarryProduction_Region_DT, quarry_sparkline_data)
+
+
+#####visualization#####
+
+DT_spk <- datatable(QuarryProduction_Region_DT_spk, escape = FALSE, extensions = c("FixedColumns","Buttons"),
+                    options = list(paging = FALSE, 
+                                   fixedColumns = list(leftColumns = 2),
+                                   dom = 'Bfrtip',
+                                   buttons = list('copy', 'csv', 
+                                                  list(
+                                                     extend = "excel",
+                                                     filename = "Quarries Production by Region",
+                                                     title = "Quarries Production by Region",
+                                                     exportOptions = list(columns = c(1:23))
+                                                  ),
+                                                  list(
+                                                     extend = "pdf",
+                                                     pageSize = "A3",
+                                                     orientation = "landscape",
+                                                     filename = "Quarries Production by Region",
+                                                     title = "Quarries Production by Region",
+                                                     exportOptions = list(columns = c(1:23))
+                                                  )
+                                   ),
+                                   initComplete = JS("
+                                                     function(settings, json) {
+                                                     $(this.api().table().header()).css({
+                                                     'font-size': '12px', 'font-family': 'Calibri','background-color': '#000', 'color': '#fff',
+                                                     });
+                                                     }
+                                                     "),
+                                   fnDrawCallback = htmlwidgets::JS(
+                                      '
+                                      function(){
+                                      HTMLWidgets.staticRender();
+                                      }
+                                      '
+                                   )
+                                   )) %>%  
+   formatStyle(columns = colnames(.$x$data), `font-size` = "12px", `font-family` = "Calibri" ) %>%
+   formatRound(c(-1, -ncol(QuarryProduction_Region_DT_spk)),digits = 0, mark = ",") %>%
+   spk_add_deps()
+
+
+DT_spk
+
+```
+
+
+Row {data-height=445}
+-----------------------------------------------------------------------
+   
+### Aggregates Material Usage
+   
+```{r}
+
+#####Data processing#####
+
+QuarryProduction_Type <- select(QuarrySurveyDB_tidy_temp1, SurveyYear, MineralTypeTarget, QuantitySold) %>%
+   group_by(SurveyYear, MineralTypeTarget) %>%
+   summarise(QuantitySold = sum(QuantitySold, na.rm = T))
+
+QuarryProduction_Type <-within(QuarryProduction_Type, MineralTypeTarget <- factor(MineralTypeTarget,
+                                                                                  levels = c("Roading", "Building", "Fill", "Agriculture",
+                                                                                             "Industry", "Rock for reclamation and protection", 
+                                                                                             "Recycled material", "Other"
+                                                                                             
+                                                                                  )))
+
+#####visualization#####
+
+MineralType <- highchart() %>%
+   hc_exporting(enabled = TRUE, formAttributes = list(target = "_blank")) %>%
+   hc_xAxis(categories = QuarryProduction_Type$SurveyYear) %>%
+   hc_yAxis(title = list(text = "Million tonnes")) %>%
+   hc_add_series(data = QuarryProduction_Type,
+                 type = "column",
+                 hcaes(x = SurveyYear, y = QuantitySold, group = MineralTypeTarget)) %>%
+   hc_chart(zoomType = "x") %>%
+   hc_plotOptions(series = list(stacking = "normal"),
+                  stackingOrder = "reversed") %>%
+   hc_tooltip(pointFormat = "<span style=\"color:{series.color}\">{series.name}</span>:
+              <b>{point.y:,.2f} Mt </b> (<b>{point.percentage:.1f}%</b>)",
+              shared = F)
+
+MineralType 
+
+
+```
+
+
+### Aggregates Production and Revenue
+
+```{r}
+
+#####Data processing#####
+
+QuarryRevenue <- select(QuarrySurveyDB_tidy_temp1, SurveyYear, QuantitySold, ValueSold) %>%
+   group_by(SurveyYear) %>%
+   summarise(ValueSold = sum(ValueSold, na.rm = T),
+             QuantitySold = sum(QuantitySold, na.rm = T)) %>%
+   mutate(Price = ValueSold/QuantitySold)
+
+
+#####visualization#####
+
+RevenueProduction <- highchart() %>%
+   hc_exporting(enabled = TRUE, formAttributes = list(target = "_blank")) %>%
+   hc_add_series(data = QuarryRevenue$ValueSold,
+                 type = "line",
+                 name = "Revenue",
+                 yAxis = 1
+   ) %>%
+   hc_add_series(data = QuarryRevenue$QuantitySold,
+                 type = "line",
+                 name = "Production",
+                 yAxis = 2) %>%
+   hc_add_series(data = QuarryRevenue$Price,
+                 type = "line",
+                 name = "Price",
+                 yAxis = 3) %>%
+   hc_xAxis(categories = QuarryRevenue$SurveyYear,
+            tickmarkPlacement = "on"
+   ) %>%
+   hc_yAxis_multiples(
+      list(lineWideth = 0, title = list(text = "")),
+      list(opposite = F, title = list(text = "NZD")),
+      list(opposite = T, title = list(text = "Tonnes")),
+      list(opposie = F, title = list(text = "NZD/Tonnes"))) %>%
+   hc_tooltip(pointFormat = "<span style=\"color:{series.color}\">{series.name}</span>:
+              <b>{point.y:,.2f}  <br/> </b>",
+              shared = T,
+              crosshairs = list(enable = T, width = 2, color = "black",dashStyle = "shortdot")
+   )
+
+RevenueProduction
+
+
+```
+
+   
+   
+Further Analysis {data-orientation=columns}
+=======================================================================
+   
+Column {data-width=450}
+-----------------------------------------------------------------------
+   
+### Regional Aggregates Production Map
+   
+```{r}
+
+
+
+QuarrySurveyDB_tidy_temp1 <- select(QuarrySurveyDB, SurveyYear, QuantitySold, ValueSold, Region, MineralType) %>%
+   filter(MineralType != "Nil Output" & MineralType != "No Return" & MineralType != "Not Operating") %>%
+   filter(Region != "Chatham Islands") %>%
+   left_join(concordance_mineraltype) %>%
+   group_by(SurveyYear, Region, MineralTypeTarget) %>%
+   summarise(QuantitySold = sum(QuantitySold, na.rm = T),
+             ValueSold = sum(ValueSold, na.rm = T)) %>%
+   ungroup()
+
+
+QuarryProduction_Region <- select(QuarrySurveyDB_tidy_temp1, SurveyYear, Region, QuantitySold) %>%
+   filter(SurveyYear ==2019) %>%
+   group_by(SurveyYear, Region) %>%
+   summarise(QuantitySold = sum(QuantitySold, na.rm = T)) %>%
+   mutate(Region = as.character(Region))
+
+
+QuarryProduction_Region$Region <- paste(QuarryProduction_Region$Region, "Region", sep = " ")
+QuarryProduction_Region[5,2] <- "Hawke's Bay Region"
+QuarryProduction_Region[6,2] <- "Manawatu-Wanganui Region"
+QuarryProduction_Region[8,2] <- "Nelson/Tasman"
+QuarryProduction_Region <- QuarryProduction_Region %>%
+   rename(REGC2017_N = Region)
+
+
+NZ_RG_sf_WGS84_Merged_ed <- NZ_RG_sf_WGS84_Merged %>%
+   left_join(QuarryProduction_Region)
+
+
+
+bins <- c(0,10000, 200000, 500000, 1000000, 5000000, 10000000)
+
+
+binpal <- colorBin("YlOrRd", 
+                   NZ_RG_sf_WGS84_Merged_ed$QuantitySold,
+                   bins = bins)
+
+labels <- sprintf(
+   "<strong>%s</strong>:<br/> %s tonnes",
+   NZ_RG_sf_WGS84_Merged_ed$REGC2017_N, prettyNum(NZ_RG_sf_WGS84_Merged_ed$QuantitySold, big.mark = ",")
+) %>% 
+   lapply(htmltools::HTML)
+
+
+leaflet() %>%
+   addPolygons(data = NZ_RG_sf_WGS84_Merged_ed,
+               fillOpacity = 1,
+               weight = 2,
+               color = "white",
+               dashArray = "3",
+               fillColor = ~binpal(QuantitySold),
+               highlightOptions = highlightOptions(
+                  weight = 3,
+                  color = "#666",
+                  fillOpacity = 0,
+                  opacity = 1,
+                  bringToFront = TRUE),
+               label = labels
+   ) %>%
+   addLegend("bottomright", pal = binpal, values = NZ_RG_sf_WGS84_Merged_ed$QuantitySold,
+             title = "Regional Quarry Production in Tonne (2019)",
+             opacity = 1)
+
+
+
+
+```
+
+
+
+Column {data-width=550}
+-------------------------------------
+   
+### Aggregates Production change YOY by Mineral Type 2020
+   
+```{r}
+
+QuarrySurveyDB_tidy_temp2 <- filter(QuarrySurveyDB, SurveyYear >= "2018" & MineralType != "Nil Output" & MineralType != "No Return" & MineralType != "Not Operating") %>%
+   select(SurveyYear, QuantitySold, ValueSold, Region, MineralType) %>%
+   left_join(concordance_mineraltype) %>%
+   group_by(SurveyYear, MineralTypeTarget) %>%
+   summarise(QuantitySold = sum(QuantitySold, na.rm = T),
+             ValueSold = sum(ValueSold, na.rm = T)) %>%
+   ungroup()
+
+QuarrySurveyDB_tidy_2018 <- filter(QuarrySurveyDB_tidy_temp2, SurveyYear == "2018")
+
+total_pro_2018 <- sum(QuarrySurveyDB_tidy_2018$QuantitySold)
+
+
+QuarrySurveyDB_tidy_2019 <- filter(QuarrySurveyDB_tidy_temp2, SurveyYear == "2019")
+
+total_pro_2019 <- sum(QuarrySurveyDB_tidy_2019$QuantitySold)
+
+# total_pro_2018 <- sum(QuarrySurveyDB_tidy_2018$QuantitySold)
+
+QuarrySurveyDB_tidy_wf <- QuarrySurveyDB_tidy_2019 %>% mutate(Change_pro = QuarrySurveyDB_tidy_2019$QuantitySold - QuarrySurveyDB_tidy_2018$QuantitySold) %>%
+   select(MineralTypeTarget, Change_pro) %>%
+   add_row(MineralTypeTarget = "2018 Total Production", Change_pro = total_pro_2018, .before = 1) %>%
+   add_row(MineralTypeTarget = "2019 Total Production", Change_pro = total_pro_2019) %>%
+   add_column(isIntermediateSum = rep(FALSE, time = 10)) %>%
+   add_column(isSum = c(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE,TRUE)) %>%
+   mutate(color = ifelse(Change_pro >= 0,"#b5ec7c",ifelse(Change_pro < 0,"#ec7c7d",NA))) %>%
+   mutate(Change_pro = as.numeric(Change_pro)) %>%
+   mutate(MineralTypeTarget = as.character(MineralTypeTarget)) 
+
+QuarrySurveyDB_tidy_wf[1,"color"] <- "#7cb5ec"
+QuarrySurveyDB_tidy_wf[10,"color"] <- "#7cb5ec"
+
+
+hcoptslang <- getOption("highcharter.lang")
+hcoptslang$thousandsSep <- ","
+options(highcharter.lang = hcoptslang)
+
+
+hcwaterfall <- highchart() %>% 
+   # hc_exporting(enabled = TRUE, formAttributes = list(target = "_blank")) %>%
+   hc_xAxis(categories = QuarrySurveyDB_tidy_wf$MineralTypeTarget) %>%
+   hc_yAxis(title = list(text = "Million tonnes")) %>%
+   hc_legend(enabled=FALSE) %>%
+   hc_tooltip(pointFormat = '<b>{point.y:,.0f}</b> tonnes', useHTML = TRUE) %>%
+   hc_add_series(data = QuarrySurveyDB_tidy_wf,
+                 type = "waterfall",
+                 hcaes(y = Change_pro,
+                       x = MineralTypeTarget,
+                       isSum = isSum,
+                       isIntermediateSum =isIntermediateSum,
+                       color = color),
+                 dataLabels = list(enabled = TRUE,
+                                   verticalAlign = "top",
+                                   inside = F,
+                                   style=list(
+                                      color="#000000"
+                                   ),
+                                   x = 0,
+                                   y = -25,
+                                   formatter = JS("function(label){if (this.y < 0 && this.point.dataLabel){label.y = this.point.shapeArgs.height;}
+                                                  return Highcharts.numberFormat(this.y, 0)}"
+                                   )
+                                   ),
+                 crop = FALSE,
+                 overflow = 'none'
+                 )
+
+hcwaterfall 
+
+```
+
+
+### Aggregates Production change YOY by Region 2020
+
+```{r}
+
+Regions_2018 <- QuarrySurveyDB %>%
+   select(SurveyYear, QuantitySold, Region) %>%
+   filter(SurveyYear == 2018) %>%
+   group_by(SurveyYear, Region) %>%
+   summarise(Quantity = sum(QuantitySold)) %>%
+   ungroup()
+
+
+total_quantity_regions_2018 <- sum(Regions_2018$Quantity)
+
+
+Regions_2019 <- QuarrySurveyDB %>%
+   select(SurveyYear, QuantitySold, Region) %>%
+   filter(SurveyYear == 2019) %>%
+   group_by(SurveyYear, Region) %>%
+   summarise(Quantity = sum(QuantitySold)) %>%
+   ungroup()
+
+
+total_quantity_regions_2019 <- sum(Regions_2019$Quantity)
+
+
+Regions_wf <- Regions_2019 %>%
+   mutate(Change_pro = Regions_2019$Quantity - Regions_2018$Quantity) %>%
+   select(Region, Change_pro) %>%
+   add_row(Region = "2018 Total Production", Change_pro = total_quantity_regions_2018, .before = 1) %>%
+   add_row(Region = "2019 Total Production", Change_pro = total_quantity_regions_2019) %>%
+   add_column(isIntermediateSum = rep(FALSE, time = 17)) %>%
+   add_column(isSum = c(rep(FALSE, time = 16),TRUE)) %>%
+   mutate(color = ifelse(Change_pro >= 0,"#b5ec7c","#ec7c7d")) %>%
+   mutate(Change_pro = as.numeric(Change_pro)) %>%
+   mutate(Region = as.character(Region))
+
+Regions_wf[1,"color"] <- "#7cb5ec"
+Regions_wf[nrow(Regions_wf),"color"] <- "#7cb5ec"
+
+
+
+
+hcoptslang <- getOption("highcharter.lang")
+hcoptslang$thousandsSep <- ","
+options(highcharter.lang = hcoptslang)
+
+
+hcwaterfall <- highchart() %>% 
+   # hc_exporting(enabled = TRUE, formAttributes = list(target = "_blank")) %>%
+   hc_xAxis(categories = Regions_wf$Region) %>%
+   hc_yAxis(title = list(text = "Million tonnes")) %>%
+   hc_legend(enabled=FALSE) %>%
+   hc_tooltip(pointFormat = '<b>{point.y:,.0f}</b> Tonns', useHTML = TRUE) %>%
+   hc_add_series(data = Regions_wf,
+                 type = "waterfall",
+                 hcaes(y = Change_pro,
+                       x = Region,
+                       isSum = isSum,
+                       isIntermediateSum =isIntermediateSum,
+                       color = color),
+                 dataLabels = list(enabled = TRUE,
+                                   verticalAlign = "top",
+                                   inside = F,
+                                   style=list(
+                                      color="#000000"
+                                   ),
+                                   x = 0,
+                                   y = -25,
+                                   formatter = JS("function(label){if (this.y < 0 && this.point.dataLabel){label.y = this.point.shapeArgs.height;}
+                                                  return Highcharts.numberFormat(this.y, 0)}"
+                                   )
+                                   ),
+                 crop = FALSE,
+                 overflow = 'none'
+                 )
+
+hcwaterfall
+
+
+```
+
+
+
+
+   
+   

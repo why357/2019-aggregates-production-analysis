@@ -1,0 +1,27 @@
+MineralType,MineralTypeTarget
+Amorphous silica,Industry
+Bentonite,Industry
+Building and dimension stone,Building
+"Clay for brick, tiles etc",Building
+Clay for pottery and ceramics,Other
+Decorative pebbles including scoria,Other
+Diatomite,Agriculture
+Dolomite for agriculture,Agriculture
+Dolomite for industry,Industry
+Limestone and marl for cement,Industry
+Limestone for agriculture,Agriculture
+Limestone for industry,Industry
+Limestone for roading,Roading
+Other,Other
+Perlite,Industry
+Pumice,Other
+Recycled material,Recycled material
+Rock for reclamation and protection,Rock for reclamation and protection
+"Rock, sand and gravel for building",Building
+"Rock, sand and gravel for roading",Roading
+"Rock, sand, gravel and clay for fill",Fill
+Sand for industry,Industry
+Serpentine,Agriculture
+Shale,Other
+Silica sand,Industry
+Zeolite,Industry
